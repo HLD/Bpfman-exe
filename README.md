@@ -147,7 +147,7 @@ Look In records are 1-minute metrics and request logs, which is too coarse for
 attacks inside the guest; that's what the kernel sensors are for. Gaps we've
 asked exe.dev about (SSH source IPs, failed logins, a control-plane audit
 table, request IDs passed into the VM, an append-only table agents can write to)
-are listed in the asks doc.
+are listed in [ASKS.md](ASKS.md), led by integration traffic and egress classification.
 
 ## Send alerts to Edgewatch
 
