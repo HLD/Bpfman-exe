@@ -8,6 +8,8 @@ output:
   webhook: ""               # POST each alert as JSON, e.g. a SIEM collector or Edgewatch
                             # (http://127.0.0.1:8000/api/ingest/warden)
   webhook_token: ""         # sent as "Authorization: Bearer <token>" (Edgewatch shows it once)
+  pull_tasks: false         # also poll the webhook URL + /tasks for passive, time-boxed follow-up hunts
+                            # (net | exec | access) that Edgewatch queues after a Look In observation
   min_severity: low         # info | low | medium | high | critical
   throttle: 60s             # suppress identical alerts within this window
 

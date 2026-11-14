@@ -159,6 +159,16 @@ output:
   webhook_token: "<token shown once by Edgewatch>"
 ```
 
+With `pull_tasks: true`, warden also polls Edgewatch every 15 seconds for **follow-up hunts**: when Look In flags something on this VM, Edgewatch can ask warden to watch live events for 10 minutes in one of three fixed, passive modes and post a short summary.
+
+| Mode | Watches |
+|---|---|
+| `net` | outbound destinations, listeners, accepted connections, DNS names |
+| `exec` | executables and arguments started, with temp/memfd/deleted/socket-stdio flags |
+| `access` | privilege changes, writes to sensitive files, shell commands, ptrace, modules, BPF loads |
+
+Warden pulls and never listens. A task carries only an ID, one of those modes and a duration (clamped to 60 to 900 s); unknown modes are ignored, at most three hunts run at once, and memory and report size are bounded. A hunt only sees events after it starts. Code: `internal/hunt`.
+
 Edgewatch accepts alerts from its own VM only and ignores `LK-*` alerts, since it polls Look In itself. See Edgewatch's `DATA_SOURCES.md`.
 
 ## Output

@@ -26,6 +26,7 @@ type Config struct {
 		EventsFile   string        `yaml:"events_file"`
 		Webhook      string        `yaml:"webhook"`
 		WebhookToken string        `yaml:"webhook_token"`
+		PullTasks    bool          `yaml:"pull_tasks"`
 		MinSeverity  string        `yaml:"min_severity"`
 		Throttle     time.Duration `yaml:"throttle"`
 	} `yaml:"output"`

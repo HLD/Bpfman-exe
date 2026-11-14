@@ -25,6 +25,7 @@ import (
 
 	"github.com/exedev/warden/internal/config"
 	"github.com/exedev/warden/internal/event"
+	"github.com/exedev/warden/internal/hunt"
 	"github.com/exedev/warden/internal/look"
 	"github.com/exedev/warden/internal/output"
 	"github.com/exedev/warden/internal/proc"
@@ -218,6 +219,13 @@ func run(cfg *config.Config, allEvents bool) error {
 	if err != nil {
 		return err
 	}
+	var hunts *hunt.Manager
+	if cfg.Output.PullTasks && cfg.Output.Webhook != "" && cfg.Output.WebhookToken != "" {
+		hc := hunt.NewClient(cfg.Output.Webhook, cfg.Output.WebhookToken)
+		hunts = hc.Mgr
+		go hc.Run(context.Background(), 15*time.Second)
+		slog.Info("follow-up hunts on", "modes", "net, exec, access", "poll", "15s")
+	}
 	refreshResolvers()
 	procs := proc.NewTable()
 	host, _ := os.Hostname()
@@ -271,6 +279,9 @@ func run(cfg *config.Config, allEvents bool) error {
 		nEvents++
 		procs.Observe(e)
 		enrich(e)
+		if hunts != nil {
+			hunts.Observe(e)
+		}
 		out.Event(e)
 		if allEvents {
 			b, _ := jsonLine(e)
