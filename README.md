@@ -2,7 +2,9 @@
 
 An eBPF host detection & response agent built for exe.dev VMs: a single
 static Go binary (cilium/ebpf, CO-RE), 19 kernel probes, 40 detection rules
-mapped to MITRE ATT&CK, and in-kernel prevention.
+mapped to MITRE ATT&CK, and in-kernel prevention. It also runs 12 SQL
+detections over exe.dev's Look In tables (proxy requests, VM metrics, SSH
+logins), so platform-side and in-guest alerts land in one stream.
 
 ```
 make build                 # needs clang, libbpf-dev, go
@@ -10,6 +12,7 @@ sudo ./bin/warden caps     # what this kernel supports + test-attach every probe
 sudo ./bin/warden run      # run in the foreground with built-in config
 make sim                   # end-to-end: 31 benign attack simulations -> 31/31 detected
 make install               # systemd service, config in /etc/warden/warden.yaml
+sudo ./bin/warden look -since 24h   # run the Look In detections once
 ```
 
 ## What exe.dev kernels give us (6.12, probed 2026-11-14)
@@ -104,6 +107,40 @@ Ops: `eq in prefix suffix contains glob regex cidr gt lt exists`, composed with 
 List-valued fields (`ancestors.name`) match if any element does. Add files under `rules_files:`.
 A rule with an existing ID overrides the built-in one. Run `warden run -events` to see every field
 on live events.
+
+## Look In detections (platform side)
+
+When a `look` integration is attached to the VM, `warden run` finds it through
+`reflection.int.exe.xyz` and polls the Look In Iceberg tables every 5 minutes
+with the `duckdb` CLI, which keeps warden static and cgo-free. Findings go
+through the same outputs as kernel alerts, and each is reported once: the
+dedupe state lives in `/var/lib/warden/look-state.json` and survives restarts.
+
+| ID | Table | Detects |
+|---|---|---|
+| LK-001 | http_requests | VM served 2xx to anonymous visitors (exposed) |
+| LK-002 | http_requests | Secrets/admin/traversal probe got past the login gate |
+| LK-003 | http_requests | Internet scanner reached a VM |
+| LK-004 | http_requests | 50+ unauthenticated requests from one IP to a private VM |
+| LK-010 | http_requests | Known exe.dev user from an IP not seen in 30 days |
+| LK-011 | ssh_access | SSH key's first login in 90 days |
+| LK-012 | ssh_access | exe.dev support session |
+| LK-013 | ssh_access | Root SSH login |
+| LK-014 | ssh_access | API remote exec with an app token (no key attribution) |
+| LK-020 | vm_metrics | Egress over 200 MB/h and 10x the VM's own p90 baseline |
+| LK-021 | vm_metrics | 15+ minutes of CPU saturation (miner) |
+| LK-022 | vm_metrics | VM restarted, moved host, or stopped reporting |
+
+Rules that need a table that doesn't exist yet (it appears with its first row)
+are skipped until it does. `go test ./internal/look` runs every rule against
+synthetic tables with one seeded example each. Add rules with `look.rules_files`;
+each rule's SQL must filter on `timestamp >= {since}` and name its `key` columns.
+
+Look In records are 1-minute metrics and request logs, which is too coarse for
+attacks inside the guest; that's what the kernel sensors are for. Gaps we've
+asked exe.dev about (SSH source IPs, failed logins, a control-plane audit
+table, request IDs passed into the VM, an append-only table agents can write to)
+are listed in the asks doc.
 
 ## Output
 

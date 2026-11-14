@@ -31,6 +31,17 @@ prevention:
   # Rules with `action: kill` only kill when this is true.
   allow_rule_kill: false
 
+# exe.dev Look In: SQL detections over the proxy's HTTP request log, per-VM
+# metrics and SSH logins (needs a `look` integration and the duckdb CLI).
+look:
+  enabled: auto             # auto: on when a look integration is attached
+  interval: 5m
+  lookback: 1h              # window examined on the first poll
+  duckdb: ""                # default: duckdb on PATH
+  state_dir: /var/lib/warden
+  rules_files: []
+  disable_rules: []
+
 shells: [sh, bash, dash, zsh, ash, ksh, fish, busybox, python, python3, perl, ruby, php, lua, node]
 
 # Kernel-side file filter. Opens of anything else are never sent to userspace.

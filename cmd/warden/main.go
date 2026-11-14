@@ -4,12 +4,14 @@ package main
 import (
 	"bufio"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"regexp"
 	"strconv"
@@ -23,6 +25,7 @@ import (
 
 	"github.com/exedev/warden/internal/config"
 	"github.com/exedev/warden/internal/event"
+	"github.com/exedev/warden/internal/look"
 	"github.com/exedev/warden/internal/output"
 	"github.com/exedev/warden/internal/proc"
 	"github.com/exedev/warden/internal/rules"
@@ -35,6 +38,7 @@ usage:
   warden run   [-config warden.yaml] [-events] [-json]   start the agent
   warden caps  [-config warden.yaml]                     report what this kernel supports
   warden rules [-config warden.yaml]                     list active detection rules
+  warden look  [-config warden.yaml] [-since 24h]        run exe.dev Look In detections once
   warden defaults                                        print the default config
 `
 
@@ -49,6 +53,7 @@ func main() {
 	cfgPath := fs.String("config", "", "config file (default: built-in)")
 	allEvents := fs.Bool("events", false, "print every telemetry event to stdout as JSON")
 	jsonOut := fs.Bool("json", false, "print alerts as JSON")
+	since := fs.Duration("since", 24*time.Hour, "look: window to examine")
 	fs.Parse(args)
 
 	cfg, err := config.Load(*cfgPath)
@@ -73,7 +78,17 @@ func main() {
 		for _, r := range en.Rules {
 			fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, r.Severity, strings.Join(r.Events, ","), r.MITRE, r.Action, r.Title)
 		}
+		if le, err := lookEngine(cfg, look.Options{Ephemeral: true}); err == nil {
+			for _, r := range le.Rules() {
+				fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\n", r.ID, r.Severity, "look:"+strings.Join(r.Tables, ","), r.MITRE, "alert", r.Title)
+			}
+		}
 		tw.Flush()
+	case "look":
+		if *jsonOut {
+			cfg.Output.Format = "json"
+		}
+		fatal(lookOnce(cfg, *since))
 	case "defaults":
 		os.Stdout.Write(config.DefaultYAML)
 	default:
@@ -207,6 +222,15 @@ func run(cfg *config.Config, allEvents bool) error {
 	procs := proc.NewTable()
 	host, _ := os.Hostname()
 	self := uint32(os.Getpid())
+	if le, err := lookEngine(cfg, look.Options{}); err != nil {
+		if cfg.Look.Enabled == "true" {
+			return fmt.Errorf("look: %w", err)
+		}
+		slog.Info("look detections off", "reason", err)
+	} else {
+		slog.Info("look detections on", "rules", len(le.Rules()), "interval", cfg.Look.Interval)
+		go lookLoop(le, cfg.Look.Interval, out, host)
+	}
 	slog.Info("warden running", "probes", fmt.Sprintf("%d/%d", ok, total), "rules", len(en.Rules), "pid", self,
 		"kill_revshell", cfg.Prevention.KillReverseShell, "rule_kill", cfg.Prevention.AllowRuleKill)
 
@@ -369,4 +393,105 @@ func caps(cfg *config.Config) error {
 func jsonLine(e *event.Event) ([]byte, error) {
 	b, err := json.Marshal(e)
 	return append(b, '\n'), err
+}
+
+// lookEngine builds the Look In detection engine, discovering the
+// integration through reflection.
+func lookEngine(cfg *config.Config, opt look.Options) (*look.Engine, error) {
+	if cfg.Look.Enabled == "false" {
+		return nil, errors.New("disabled in config")
+	}
+	base, err := look.ParseRules(config.DefaultLookRules)
+	if err != nil {
+		return nil, fmt.Errorf("built-in look rules: %w", err)
+	}
+	sets := [][]*look.Rule{base}
+	for _, f := range cfg.Look.RulesFiles {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		rs, err := look.ParseRules(b)
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", f, err)
+		}
+		sets = append(sets, rs)
+	}
+	off := config.Set(cfg.Look.DisableRules)
+	for _, set := range sets {
+		for _, r := range set {
+			if off[r.ID] {
+				r.Disabled = true
+			}
+		}
+	}
+	duck := cfg.Look.DuckDB
+	if duck == "" {
+		if duck, err = exec.LookPath("duckdb"); err != nil {
+			return nil, errors.New("duckdb CLI not found")
+		}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	endpoint, bucket, err := look.Discover(ctx)
+	if err != nil {
+		return nil, err
+	}
+	opt.Endpoint, opt.Bucket, opt.DuckDB = endpoint, bucket, duck
+	opt.StateDir = cfg.Look.StateDir
+	if opt.Lookback == 0 {
+		opt.Lookback = cfg.Look.Lookback
+	}
+	return look.New(opt, sets...), nil
+}
+
+func lookAlert(f look.Finding, host string) *output.Alert {
+	e := &event.Event{Time: time.Now().UTC(), Type: "look", Fields: map[string]any{"look.key": f.Key}}
+	for k, v := range f.Row {
+		e.Set("look."+k, v)
+	}
+	r := f.Rule
+	return &output.Alert{
+		Time: e.Time, Host: host, Action: "alert", Event: e,
+		Rule: &rules.Rule{ID: r.ID, Title: r.Title, Description: r.Description, Severity: r.Severity, MITRE: r.MITRE},
+	}
+}
+
+func lookLoop(le *look.Engine, every time.Duration, out *output.Writer, host string) {
+	for {
+		ctx, cancel := context.WithTimeout(context.Background(), every+5*time.Minute)
+		fs, err := le.Poll(ctx)
+		cancel()
+		if err != nil {
+			slog.Warn("look poll", "err", err)
+		}
+		for _, f := range fs {
+			out.Alert(lookAlert(f, host))
+		}
+		time.Sleep(every)
+	}
+}
+
+func lookOnce(cfg *config.Config, since time.Duration) error {
+	if cfg.Look.Enabled == "false" {
+		cfg.Look.Enabled = "true"
+	}
+	le, err := lookEngine(cfg, look.Options{Ephemeral: true, Lookback: since})
+	if err != nil {
+		return err
+	}
+	out, err := output.New(output.Options{Format: cfg.Output.Format, MinSeverity: "info"})
+	if err != nil {
+		return err
+	}
+	host, _ := os.Hostname()
+	fs, err := le.Poll(context.Background())
+	if err != nil {
+		return err
+	}
+	for _, f := range fs {
+		out.Alert(lookAlert(f, host))
+	}
+	slog.Info("look done", "findings", len(fs), "window", since)
+	return nil
 }

@@ -13,6 +13,7 @@ NoNewPrivileges=yes
 ProtectHome=read-only
 ProtectSystem=full
 ReadWritePaths=/var/log/warden
+StateDirectory=warden
 StandardOutput=journal
 
 [Install]

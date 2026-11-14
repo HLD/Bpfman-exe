@@ -1,16 +1,16 @@
 // Package rules implements warden's YAML detection rule language.
 //
-//	- id: WD-001
-//	  title: Reverse shell
-//	  severity: critical        # info|low|medium|high|critical
-//	  mitre: T1059.004
-//	  event: exec               # one type or a list
-//	  action: alert             # alert|kill
-//	  match:
-//	    all:
-//	      - {field: exec.stdin_socket, eq: true}
-//	      - {field: proc.name, in: [bash, sh]}
-//	      - not: {field: parent.name, in: [sshd]}
+//   - id: WD-001
+//     title: Reverse shell
+//     severity: critical        # info|low|medium|high|critical
+//     mitre: T1059.004
+//     event: exec               # one type or a list
+//     action: alert             # alert|kill
+//     match:
+//     all:
+//   - {field: exec.stdin_socket, eq: true}
+//   - {field: proc.name, in: [bash, sh]}
+//   - not: {field: parent.name, in: [sshd]}
 //
 // Operators: eq, in, prefix, suffix, contains, glob, regex, cidr, gt, lt,
 // exists. String operators take a string or a list (any match). When the

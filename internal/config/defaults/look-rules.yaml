@@ -1,0 +1,223 @@
+# warden Look In detections: SQL over exe.dev's http_requests, vm_metrics
+# and ssh_access tables. {since} is the start of the window being examined;
+# every query must filter on timestamp with it. `key` columns identify one
+# finding, which is reported once (state survives restarts).
+# Columns returned become alert fields (look.<column>); return vm_name.
+
+# ------------------------------------------------------------- exposure
+- id: LK-001
+  title: VM served content to anonymous visitors (publicly exposed)
+  severity: medium
+  mitre: T1190
+  tables: [http_requests]
+  key: [vm_name, host, hour]
+  sql: |
+    SELECT vm_name, host, date_trunc('hour', min(timestamp)) AS hour,
+      count(*) AS requests, count(DISTINCT source_ip) AS source_ips,
+      list(DISTINCT path)[1:5] AS sample_paths
+    FROM http_requests
+    WHERE timestamp >= {since} AND login_user_id = ''
+      AND status BETWEEN 200 AND 299
+      AND host NOT LIKE '%.shelley.%'
+    GROUP BY vm_name, host
+
+- id: LK-002
+  title: Exploit/recon path reached the application
+  description: A probe for secrets, admin panels or traversal got past the exe.dev proxy's login gate.
+  severity: high
+  mitre: T1595.003
+  tables: [http_requests]
+  key: [vm_name, source_ip, path]
+  sql: |
+    SELECT vm_name, host, source_ip, method, path, status,
+      left(user_agent, 120) AS user_agent, login_user_id, count(*) AS hits
+    FROM http_requests
+    WHERE timestamp >= {since}
+      AND status NOT IN (307, 401, 421, 502, 503)
+      AND regexp_matches(lower(path),
+        '(/\.env|/\.git/|/\.aws/|/\.ssh/|wp-(admin|login|config)|phpmyadmin|/actuator|/server-status|/cgi-bin/|\.\./|%2e%2e|/etc/passwd|/proc/self|/vendor/phpunit|/boaform|/hnap1|/\.ds_store|/config\.json$|/backup\.(zip|tar|sql))')
+    GROUP BY ALL
+
+- id: LK-003
+  title: Internet scanner reached a VM
+  severity: low
+  mitre: T1595.002
+  tables: [http_requests]
+  key: [vm_name, scanner, day]
+  sql: |
+    SELECT vm_name, date_trunc('day', min(timestamp)) AS day,
+      regexp_extract(lower(user_agent),
+        '(palo alto|censys|shodan|zgrab|masscan|nmap|nuclei|sqlmap|nikto|gobuster|ffuf|internetmeasurement|expanse|l9explore|leakix|modat|netcraft|bitsight)', 1) AS scanner,
+      count(*) AS requests, count(DISTINCT source_ip) AS source_ips,
+      max(status) AS max_status
+    FROM http_requests
+    WHERE timestamp >= {since}
+      AND regexp_matches(lower(user_agent),
+        '(palo alto|censys|shodan|zgrab|masscan|nmap|nuclei|sqlmap|nikto|gobuster|ffuf|internetmeasurement|expanse|l9explore|leakix|modat|netcraft|bitsight)')
+    GROUP BY ALL
+
+- id: LK-004
+  title: Burst of unauthenticated requests against a private VM
+  severity: medium
+  mitre: T1110
+  tables: [http_requests]
+  key: [vm_name, source_ip, hour]
+  sql: |
+    SELECT vm_name, source_ip, date_trunc('hour', min(timestamp)) AS hour,
+      count(*) AS denied, count(DISTINCT path) AS paths,
+      left(any_value(user_agent), 120) AS user_agent
+    FROM http_requests
+    WHERE timestamp >= {since} AND login_user_id = '' AND status IN (307, 401)
+    GROUP BY vm_name, source_ip
+    HAVING count(*) >= 50
+
+# --------------------------------------------------------------- identity
+- id: LK-010
+  title: exe.dev user reached VMs from a source IP not seen in 30 days
+  severity: medium
+  mitre: T1078
+  tables: [http_requests]
+  key: [login_user_id, source_ip]
+  sql: |
+    SELECT login_user_id, source_ip, min(timestamp) AS first_seen,
+      list(DISTINCT vm_name) AS vms, count(*) AS requests,
+      left(any_value(user_agent), 120) AS user_agent
+    FROM http_requests
+    WHERE timestamp >= now() - INTERVAL 30 DAY
+      AND login_user_id <> '' AND source_ip <> ''
+    GROUP BY login_user_id, source_ip
+    HAVING min(timestamp) >= {since}
+      -- the user must have history, else every IP of a new user is "new"
+      AND login_user_id IN (
+        SELECT login_user_id FROM http_requests
+        WHERE timestamp >= now() - INTERVAL 30 DAY AND timestamp < {since}
+          AND login_user_id <> '')
+
+- id: LK-011
+  title: SSH key used for the first time in 90 days
+  severity: medium
+  mitre: T1098.004
+  tables: [ssh_access]
+  key: [key_fingerprint, login_user_id]
+  sql: |
+    SELECT key_fingerprint, login_user_id, min(timestamp) AS first_login,
+      list(DISTINCT coalesce(nullif(vm_name, ''), '(lobby)')) AS logged_in_to,
+      list(DISTINCT via) AS via
+    FROM ssh_access
+    WHERE timestamp >= now() - INTERVAL 90 DAY AND key_fingerprint <> ''
+    GROUP BY ALL
+    HAVING min(timestamp) >= {since}
+
+- id: LK-012
+  title: exe.dev support logged in to a VM
+  severity: high
+  mitre: T1078.004
+  tables: [ssh_access]
+  key: [timestamp, vm_name, login_user_id]
+  sql: |
+    SELECT timestamp, vm_name, ssh_user, login_user_id, key_fingerprint
+    FROM ssh_access
+    WHERE timestamp >= {since} AND via = 'support'
+
+- id: LK-013
+  title: Root SSH login to a VM
+  severity: low
+  mitre: T1078.003
+  tables: [ssh_access]
+  key: [vm_name, login_user_id, key_fingerprint, day]
+  sql: |
+    SELECT vm_name, login_user_id, key_fingerprint, list(DISTINCT via) AS via,
+      date_trunc('day', min(timestamp)) AS day, count(*) AS logins
+    FROM ssh_access
+    WHERE timestamp >= {since} AND ssh_user = 'root'
+    GROUP BY vm_name, login_user_id, key_fingerprint
+
+- id: LK-014
+  title: Remote exec through the HTTPS API with an app token (no key attribution)
+  severity: low
+  mitre: T1059
+  tables: [ssh_access]
+  key: [vm_name, login_user_id, hour]
+  sql: |
+    SELECT vm_name, login_user_id, ssh_user,
+      date_trunc('hour', min(timestamp)) AS hour, count(*) AS sessions
+    FROM ssh_access
+    WHERE timestamp >= {since} AND via = 'api_ssh' AND key_fingerprint = ''
+    GROUP BY vm_name, login_user_id, ssh_user
+
+# ---------------------------------------------------------- resource abuse
+- id: LK-020
+  title: Egress far above the VM's own baseline (possible exfiltration)
+  severity: high
+  mitre: T1048
+  tables: [vm_metrics]
+  key: [vm_name, hour]
+  sql: |
+    WITH d AS (
+      SELECT vm_name, timestamp,
+        increase(net_tx_bytes, lag(net_tx_bytes) OVER w) AS tx
+      FROM vm_metrics
+      WHERE timestamp >= now() - INTERVAL 7 DAY
+      WINDOW w AS (PARTITION BY vm_name ORDER BY timestamp)
+    ),
+    h AS (
+      SELECT vm_name, date_trunc('hour', timestamp) AS hour, sum(tx) AS tx
+      FROM d GROUP BY ALL
+    ),
+    base AS (
+      SELECT vm_name, quantile_cont(tx, 0.9) AS p90_tx, count(*) AS hours
+      FROM h WHERE hour < date_trunc('hour', {since})
+      GROUP BY vm_name
+    )
+    SELECT h.vm_name, h.hour, round(h.tx / 1e6, 1) AS tx_mb,
+      round(base.p90_tx / 1e6, 1) AS baseline_p90_mb, base.hours AS baseline_hours
+    FROM h JOIN base USING (vm_name)
+    WHERE h.hour >= date_trunc('hour', {since})
+      AND base.hours >= 6
+      AND h.tx > 200e6
+      AND h.tx > 10 * greatest(base.p90_tx, 1e6)
+
+- id: LK-021
+  title: Sustained CPU saturation (possible cryptominer)
+  severity: medium
+  mitre: T1496
+  tables: [vm_metrics]
+  key: [vm_name, hour]
+  sql: |
+    WITH d AS (
+      SELECT vm_name, timestamp, cpus,
+        increase(cpu_usec, lag(cpu_usec) OVER w) / 1e6
+          / nullif(epoch(timestamp - lag(timestamp) OVER w), 0) AS cores_busy
+      FROM vm_metrics
+      WHERE timestamp >= {since} - INTERVAL 2 MINUTE
+      WINDOW w AS (PARTITION BY vm_name ORDER BY timestamp)
+    )
+    SELECT vm_name, date_trunc('hour', min(timestamp)) AS hour, max(cpus) AS cpus,
+      count(*) AS saturated_minutes, round(avg(cores_busy), 2) AS avg_cores_busy
+    FROM d
+    WHERE timestamp >= {since} AND cores_busy >= 0.9 * cpus
+    GROUP BY vm_name
+    HAVING count(*) >= 15
+
+- id: LK-022
+  title: VM restarted, moved host, or stopped reporting
+  description: Line this up with warden's own uptime; an unexplained restart can hide tampering.
+  severity: low
+  mitre: T1529
+  tables: [vm_metrics]
+  key: [vm_name, first_after]
+  sql: |
+    SELECT vm_name, prev_ts AS last_before, timestamp AS first_after,
+      CASE WHEN net_rx_bytes < prev_rx OR net_tx_bytes < prev_tx
+        THEN 'restarted or moved' ELSE 'no readings for over 5 minutes' END AS what
+    FROM (
+      SELECT vm_name, timestamp, net_rx_bytes, net_tx_bytes,
+        lag(timestamp) OVER w AS prev_ts, lag(net_rx_bytes) OVER w AS prev_rx,
+        lag(net_tx_bytes) OVER w AS prev_tx
+      FROM vm_metrics
+      WHERE timestamp >= {since} - INTERVAL 10 MINUTE
+      WINDOW w AS (PARTITION BY vm_name ORDER BY timestamp)
+    )
+    WHERE timestamp >= {since}
+      AND (net_rx_bytes < prev_rx OR net_tx_bytes < prev_tx
+           OR timestamp - prev_ts > INTERVAL 5 MINUTE)

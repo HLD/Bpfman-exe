@@ -16,6 +16,9 @@ var DefaultYAML []byte
 //go:embed defaults/rules.yaml
 var DefaultRules []byte
 
+//go:embed defaults/look-rules.yaml
+var DefaultLookRules []byte
+
 type Config struct {
 	Output struct {
 		Format      string        `yaml:"format"`
@@ -39,6 +42,15 @@ type Config struct {
 		BlockedPorts     []uint16 `yaml:"blocked_ports"`
 		AllowRuleKill    bool     `yaml:"allow_rule_kill"`
 	} `yaml:"prevention"`
+	Look struct {
+		Enabled      string        `yaml:"enabled"` // auto | true | false
+		Interval     time.Duration `yaml:"interval"`
+		Lookback     time.Duration `yaml:"lookback"`
+		DuckDB       string        `yaml:"duckdb"`
+		StateDir     string        `yaml:"state_dir"`
+		RulesFiles   []string      `yaml:"rules_files"`
+		DisableRules []string      `yaml:"disable_rules"`
+	} `yaml:"look"`
 	Shells []string `yaml:"shells"`
 	Watch  struct {
 		Read       []string `yaml:"read"`
@@ -64,6 +76,18 @@ func Load(path string) (*Config, error) {
 	}
 	if c.Output.Format == "" {
 		c.Output.Format = "text"
+	}
+	if c.Look.Enabled == "" {
+		c.Look.Enabled = "auto"
+	}
+	if c.Look.Interval == 0 {
+		c.Look.Interval = 5 * time.Minute
+	}
+	if c.Look.Lookback == 0 {
+		c.Look.Lookback = time.Hour
+	}
+	if c.Look.StateDir == "" {
+		c.Look.StateDir = "/var/lib/warden"
 	}
 	if c.Output.MinSeverity == "" {
 		c.Output.MinSeverity = "low"

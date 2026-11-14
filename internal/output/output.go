@@ -93,7 +93,7 @@ func (w *Writer) Event(e *event.Event) {
 func throttleKey(a *Alert) string {
 	f := a.Event.Fields
 	obj := ""
-	for _, k := range []string{"file.path", "net.daddr", "dns.query", "target.comm", "module.name"} {
+	for _, k := range []string{"look.key", "file.path", "net.daddr", "dns.query", "target.comm", "module.name"} {
 		if v, ok := f[k]; ok {
 			obj = fmt.Sprint(v)
 			break
@@ -147,16 +147,20 @@ func (w *Writer) text(a *Alert) {
 	f := a.Event.Fields
 	fmt.Fprintf(w.stdout, "%s %s%-8s\033[0m %s %s  [%s]\n", a.Time.Format("15:04:05"), sevColor[a.Rule.Severity],
 		strings.ToUpper(a.Rule.Severity), a.Rule.ID, a.Rule.Title, a.Rule.MITRE)
-	fmt.Fprintf(w.stdout, "    tree: %s\n", a.Tree)
-	fmt.Fprintf(w.stdout, "    proc: pid=%d uid=%d exe=%v cmd=%q", a.Event.TGID, a.Event.UID, f["proc.exe"], f["proc.cmdline"])
-	if c, _ := f["container"].(string); c != "" {
-		fmt.Fprintf(w.stdout, " container=%s", c)
+	if a.Tree != "" {
+		fmt.Fprintf(w.stdout, "    tree: %s\n", a.Tree)
 	}
-	fmt.Fprintln(w.stdout)
+	if a.Event.TGID != 0 {
+		fmt.Fprintf(w.stdout, "    proc: pid=%d uid=%d exe=%v cmd=%q", a.Event.TGID, a.Event.UID, f["proc.exe"], f["proc.cmdline"])
+		if c, _ := f["container"].(string); c != "" {
+			fmt.Fprintf(w.stdout, " container=%s", c)
+		}
+		fmt.Fprintln(w.stdout)
+	}
 	var keys []string
 	for k := range f {
 		if strings.HasPrefix(k, "proc.") || strings.HasPrefix(k, "parent.") || strings.HasPrefix(k, "ancestors.") ||
-			k == "process_tree" || k == "container" || k == "cgroup_id" || k == "mntns" || k == "gid" || k == "exec.argv" {
+			k == "process_tree" || k == "container" || k == "cgroup_id" || k == "mntns" || k == "gid" || k == "exec.argv" || k == "look.key" {
 			continue
 		}
 		if b, ok := f[k].(bool); ok && !b {
