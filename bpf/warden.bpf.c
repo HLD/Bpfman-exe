@@ -307,14 +307,22 @@ static __always_inline void fill_hdr_basic(struct hdr *h, u32 type)
 	bpf_get_current_comm(h->comm, sizeof(h->comm));
 }
 
-static __always_inline bool fd_is_socket(struct task_struct *t, int fd)
+// True only for IPv4/IPv6 sockets: AF_UNIX socketpairs are how libuv
+// (Node, Claude Code, VS Code server) wires child stdio, not a network peer.
+static __always_inline bool fd_is_inet_socket(struct task_struct *t, int fd)
 {
 	struct file **fds = BPF_CORE_READ(t, files, fdt, fd);
 	struct file *f = NULL;
+	struct socket *sock;
+	u16 family;
 
 	if (!fds || bpf_probe_read_kernel(&f, sizeof(f), &fds[fd]) || !f)
 		return false;
-	return (BPF_CORE_READ(f, f_inode, i_mode) & S_IFMT) == S_IFSOCK;
+	if ((BPF_CORE_READ(f, f_inode, i_mode) & S_IFMT) != S_IFSOCK)
+		return false;
+	sock = BPF_CORE_READ(f, private_data);
+	family = BPF_CORE_READ(sock, sk, __sk_common.skc_family);
+	return family == AF_INET || family == AF_INET6;
 }
 
 static __always_inline bool has_prefix(const char *s, const char *p, int n)
@@ -360,9 +368,9 @@ int BPF_PROG(on_exec, struct task_struct *p, pid_t old_pid, struct linux_binprm 
 	    has_prefix(e->filename, "/dev/shm/", 9))
 		e->h.flags |= XF_TMPPATH;
 
-	if (fd_is_socket(p, 0))
+	if (fd_is_inet_socket(p, 0))
 		e->h.flags |= XF_STDIN_SOCK;
-	if (fd_is_socket(p, 1))
+	if (fd_is_inet_socket(p, 1))
 		e->h.flags |= XF_STDOUT_SOCK;
 
 	unsigned long as = BPF_CORE_READ(p, mm, arg_start);

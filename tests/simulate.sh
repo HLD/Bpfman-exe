@@ -14,6 +14,10 @@ python3 -c 'import socket,os;s=socket.create_connection(("127.0.0.1",9101));os.d
 echo "  revshell exit status: $? (137 = SIGKILL)"
 kill $L 2>/dev/null
 
+step                        # negative: shell over AF_UNIX socketpair (libuv/Node child stdio) must NOT alert or die
+python3 -c 'import socket,subprocess;a,b=socket.socketpair();r=subprocess.run(["/bin/sh","-c","true"],stdin=b,stdout=b);exit(r.returncode)'
+echo "  socketpair shell exit status: $? (expect 0)"
+
 step WD-002                 # bash /dev/tcp outbound
 nc -l 0.0.0.0 9102 >/dev/null 2>&1 & L=$!; sleep 0.3
 bash -c "exec 3<>/dev/tcp/$MYIP/9102; echo hi >&3" 2>/dev/null

@@ -17,6 +17,11 @@ for rid in sorted(set(expected)):
     ok += hit
     detail = fired[rid]["process_tree"] if hit else ""
     print(f"{'PASS' if hit else 'MISS'}  {rid}  {detail}")
+bad = [a for l in open(alerts_file) for a in [json.loads(l)]
+       if a["rule"]["id"] == "WD-001" and a["event"]["fields"].get("proc.cmdline") == "/bin/sh -c true"]
+if bad:
+    print("FAIL  WD-001 fired on AF_UNIX socketpair shell (false positive)")
+    ok -= 1
 extra = sorted(set(fired) - set(expected))
 print(f"\n{ok}/{len(set(expected))} expected detections fired")
 if extra:
