@@ -1,0 +1,96 @@
+# warden configuration. Every list here is merged with nothing: what you
+# write is what the kernel gets, so copy this file as a starting point.
+
+output:
+  format: text              # text | json  (stdout)
+  alerts_file: /var/log/warden/alerts.jsonl
+  events_file: ""           # set to log ALL telemetry as JSONL (verbose)
+  webhook: ""               # POST each alert as JSON, e.g. a SIEM collector
+  min_severity: low         # info | low | medium | high | critical
+  throttle: 60s             # suppress identical alerts within this window
+
+# Extra rule files, loaded after the built-in set. A rule with the same id
+# overrides the built-in one.
+rules_files: []
+disable_rules: []
+disable_probes: []          # e.g. [on_readline, on_mprotect]
+
+# In-kernel prevention. These act at sched_process_exec, before the new
+# program runs a single instruction (bpf_send_signal SIGKILL).
+prevention:
+  kill_reverse_shell: true      # shell exec'd with socket on stdin AND stdout
+  kill_memfd_exec: false        # fileless exec from memfd_create
+  kill_deleted_exec: false      # exec of a binary already unlinked from disk
+  kill_tmp_exec: false          # exec from /tmp, /var/tmp, /dev/shm or tmpfs
+  kill_blocklisted_exec: true   # exec of any path in blocked_exec_paths
+  blocked_exec_paths: []
+  # Outbound connect() deny via cgroup/connect4+6 on the root cgroup
+  # (applies to every process and container on the host).
+  blocked_cidrs: []
+  blocked_ports: []             # e.g. common stratum ports: [3333, 5555, 7777, 14444]
+  # Rules with `action: kill` only kill when this is true.
+  allow_rule_kill: false
+
+shells: [sh, bash, dash, zsh, ash, ksh, fish, busybox, python, python3, perl, ruby, php, lua, node]
+
+# Kernel-side file filter. Opens of anything else are never sent to userspace.
+watch:
+  read:         # any open (read or write) is reported
+    - /etc/shadow
+    - /etc/gshadow
+    - /etc/sudoers
+    - /etc/sudoers.d
+    - /etc/ld.so.preload
+    - /root/.ssh
+    - /proc/kcore
+    - /dev/mem
+  write:        # only opens with write access are reported
+    - /etc/passwd
+    - /etc/group
+    - /etc/hosts
+    - /etc/crontab
+    - /etc/cron.d
+    - /etc/cron.hourly
+    - /etc/cron.daily
+    - /etc/cron.weekly
+    - /etc/cron.monthly
+    - /var/spool/cron
+    - /etc/systemd/system
+    - /lib/systemd/system
+    - /usr/lib/systemd/system
+    - /etc/rc.local
+    - /etc/profile
+    - /etc/profile.d
+    - /etc/bash.bashrc
+    - /etc/environment
+    - /etc/pam.d
+    - /etc/ssh/sshd_config
+    - /etc/ssh/sshd_config.d
+    - /etc/modules
+    - /etc/modules-load.d
+    - /boot
+    - /var/log/wtmp
+    - /var/log/btmp
+    - /var/log/lastlog
+    - /var/log/auth.log
+    - /usr/bin
+    - /usr/sbin
+    - /usr/local/bin
+  names_read:   # path component at any depth, e.g. ~/.ssh/... for every user
+    - .ssh
+    - .aws
+    - .kube
+    - .gnupg
+    - .git-credentials
+    - .netrc
+    - .pgpass
+    - .docker
+    - environ
+  names_write:
+    - .bashrc
+    - .bash_profile
+    - .profile
+    - .zshrc
+    - .bash_logout
+    - authorized_keys
+    - autostart

@@ -1,0 +1,19 @@
+[Unit]
+Description=warden eBPF host detection & response
+Documentation=file:///etc/warden/README.md
+After=network.target
+
+[Service]
+ExecStart=/usr/local/bin/warden run -config /etc/warden/warden.yaml
+Restart=always
+RestartSec=2
+LimitMEMLOCK=infinity
+OOMScoreAdjust=-900
+NoNewPrivileges=yes
+ProtectHome=read-only
+ProtectSystem=full
+ReadWritePaths=/var/log/warden
+StandardOutput=journal
+
+[Install]
+WantedBy=multi-user.target

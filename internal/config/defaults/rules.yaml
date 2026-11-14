@@ -1,0 +1,396 @@
+# warden built-in detection rules. Override any rule by id in a rules_files entry.
+
+# ------------------------------------------------------------- execution
+- id: WD-001
+  title: Reverse shell - interpreter with network socket as stdio
+  severity: critical
+  mitre: T1059.004
+  event: exec
+  match:
+    all:
+      - {field: exec.stdin_socket, eq: true}
+      - {field: exec.stdout_socket, eq: true}
+
+- id: WD-002
+  title: Shell process opened an outbound TCP connection
+  description: Shells do not normally connect out themselves; bash /dev/tcp redirection does.
+  severity: high
+  mitre: T1059.004
+  event: connect
+  match:
+    all:
+      - {field: comm, in: [sh, bash, dash, zsh, ash, ksh]}   # comm, not exe: busybox applets share one binary
+      - not: {field: net.daddr, cidr: [127.0.0.0/8, "::1/128"]}
+
+- id: WD-003
+  title: Interpreter one-liner with socket/exec primitives
+  severity: high
+  mitre: T1059
+  event: exec
+  match:
+    all:
+      - {field: proc.name, regex: '^(python[0-9.]*|perl|ruby|php[0-9.]*|lua[0-9.]*|node|awk|gawk)$'}
+      - {field: exec.args, regex: '(socket\.socket|pty\.spawn|/dev/tcp/|IO::Socket|TCPSocket|fsockopen|child_process|subprocess\.(call|Popen).*sh|os\.dup2|/inet/tcp/)'}
+
+- id: WD-004
+  title: Netcat/socat spawning a program
+  severity: high
+  mitre: T1059
+  event: exec
+  match:
+    any:
+      - {field: exec.args, regex: '(^|/|\s)(nc|ncat|netcat|nc\.traditional|nc\.openbsd)\s(.*\s)?(-[a-zA-Z]*[ec]|--(exec|sh-exec|lua-exec))\s'}
+      - {field: exec.args, regex: '(^|/|\s)socat\s.*(?i)(exec|system):'}
+
+- id: WD-005
+  title: Fileless execution from memfd
+  severity: critical
+  mitre: T1620
+  event: exec
+  match: {field: exec.memfd, eq: true}
+
+- id: WD-006
+  title: Execution of a deleted binary
+  severity: high
+  mitre: T1070.004
+  event: exec
+  match:
+    all:
+      - {field: exec.deleted, eq: true}
+      - {field: exec.memfd, eq: false}
+
+- id: WD-007
+  title: Execution from a temporary directory
+  severity: medium
+  mitre: T1204.002
+  event: exec
+  match:
+    all:
+      - any:
+          - {field: exec.tmp_path, eq: true}
+          - {field: exec.tmpfs, eq: true}
+      - {field: exec.memfd, eq: false}
+      - not: {field: proc.exe, prefix: [/tmp/go-build, /tmp/go-link, /run/user/]}
+
+- id: WD-008
+  title: Remote script piped into a shell
+  severity: medium
+  mitre: T1105
+  event: exec
+  match:
+    all:
+      - {field: proc.name, in: [sh, bash, dash, zsh]}
+      - {field: exec.args, regex: '(curl|wget)\s[^|]*\|\s*(sudo\s+)?(ba|z|da)?sh\b'}
+
+- id: WD-009
+  title: Encoded payload decoded and executed
+  severity: high
+  mitre: T1140
+  event: exec
+  match:
+    any:
+      - {field: exec.args, regex: 'base64\s+(-d|--decode|-D)[^|]*\|\s*(ba|z|da)?sh'}
+      - {field: exec.args, regex: '(python[0-9.]*|perl)\s+-[ec]\s.*(b64decode|decode_base64|exec\(|eval\()'}
+
+- id: WD-010
+  title: Cryptominer execution
+  severity: high
+  mitre: T1496
+  event: exec
+  match:
+    any:
+      - {field: proc.name, regex: '(?i)^(xmrig|xmr-stak|minerd|cpuminer|ethminer|t-rex|nbminer|lolminer|kdevtmpfsi|kinsing)'}
+      - {field: exec.args, regex: '(stratum\+(tcp|ssl)://|--donate-level|-o\s+pool\.|cryptonight|randomx)'}
+
+- id: WD-011
+  title: Process killed in-kernel by prevention policy
+  severity: high
+  mitre: T1059
+  event: exec
+  match: {field: exec.killed, eq: true}
+
+# ------------------------------------------------------------ credentials
+- id: WD-020
+  title: Shadow password file read
+  severity: high
+  mitre: T1003.008
+  event: file
+  match:
+    all:
+      - {field: file.path, in: [/etc/shadow, /etc/gshadow]}
+      - not: {field: proc.name, in: [sudo, su, login, sshd, sshd-session, passwd, chpasswd, unix_chkpwd, useradd, usermod, userdel, groupadd, groupmod, chage, gpasswd, newusers, pwck, grpck, chfn, chsh, cron, systemd-logind, polkitd, polkit-agent-helper-1, dpkg, vipw, vigr, sshd-auth]}
+
+- id: WD-021
+  title: SSH private key accessed by non-SSH process
+  severity: high
+  mitre: T1552.004
+  event: file
+  match:
+    all:
+      - {field: file.path, regex: '/\.ssh/(id_[^/]*|.*\.pem)$'}
+      - not: {field: file.name, suffix: .pub}
+      - not: {field: proc.name, in: [ssh, ssh-add, ssh-agent, sshd, sshd-session, ssh-keygen, scp, sftp, rsync, git, git-remote-http, mosh-client, exe-init]}
+
+- id: WD-022
+  title: Cloud / cluster / registry credentials accessed
+  severity: medium
+  mitre: T1552.001
+  event: file
+  match:
+    all:
+      - {field: file.path, regex: '/(\.aws/(credentials|config)|\.kube/config|\.docker/config\.json|\.git-credentials|\.netrc|\.pgpass|\.gnupg/private-keys)'}
+      - not: {field: proc.name, in: [aws, aws_completer, kubectl, helm, k9s, docker, docker-credential-desktop, terraform, git, git-credential-store, git-credential-cache, git-remote-https, curl, psql, pg_dump, gpg, gpg-agent, gh, podman, skopeo, crane]}
+
+- id: WD-023
+  title: Another process's environment or memory read via /proc
+  severity: medium
+  mitre: T1552
+  event: file
+  match:
+    all:
+      - {field: file.path, regex: '^/proc/[0-9]+/(environ|mem)$'}
+      - {field: file.foreign_proc, eq: true}
+      - not: {field: proc.name, in: [ps, top, htop, btop, systemd, gdb, strace, lsof, procs, glances]}
+
+- id: WD-024
+  title: Kernel or physical memory access
+  severity: critical
+  mitre: T1003
+  event: file
+  match: {field: file.path, in: [/proc/kcore, /dev/mem, /dev/kmem]}
+
+# ------------------------------------------------------------ persistence
+- id: WD-030
+  title: SSH authorized_keys modified
+  severity: high
+  mitre: T1098.004
+  event: file
+  match:
+    all:
+      - {field: file.name, eq: authorized_keys}
+      - {field: file.write, eq: true}
+      - not: {field: proc.name, in: [exe-init, cloud-init, ssh-copy-id]}
+
+- id: WD-031
+  title: Cron persistence
+  severity: medium
+  mitre: T1053.003
+  event: file
+  match:
+    all:
+      - {field: file.write, eq: true}
+      - {field: file.path, prefix: [/etc/cron, /var/spool/cron]}
+      - not: {field: proc.name, in: [dpkg, apt, apt-get, unattended-upgr, rpm, dnf, yum]}
+
+- id: WD-032
+  title: Systemd unit persistence
+  severity: medium
+  mitre: T1543.002
+  event: file
+  match:
+    all:
+      - {field: file.write, eq: true}
+      - {field: file.path, prefix: [/etc/systemd/system, /lib/systemd/system, /usr/lib/systemd/system]}
+      - not: {field: proc.name, in: [dpkg, apt, apt-get, unattended-upgr, systemctl, systemd, rpm, dnf, yum, deb-systemd-helper, deb-systemd-invoke]}
+
+- id: WD-033
+  title: Dynamic linker preload hijack (/etc/ld.so.preload)
+  severity: critical
+  mitre: T1574.006
+  event: file
+  match:
+    all:
+      - {field: file.path, eq: /etc/ld.so.preload}
+      - {field: file.write, eq: true}
+
+- id: WD-034
+  title: Shell startup file modified
+  severity: low
+  mitre: T1546.004
+  event: file
+  match:
+    all:
+      - {field: file.write, eq: true}
+      - any:
+          - {field: file.name, in: [.bashrc, .bash_profile, .profile, .zshrc, .bash_logout, bash.bashrc, profile, environment]}
+          - {field: file.path, prefix: /etc/profile.d/}
+
+- id: WD-035
+  title: Sudoers modified
+  severity: high
+  mitre: T1548.003
+  event: file
+  match:
+    all:
+      - {field: file.write, eq: true}
+      - {field: file.path, prefix: /etc/sudoers}
+      - not: {field: proc.name, in: [visudo, dpkg]}
+
+- id: WD-036
+  title: Account database modified outside account tools
+  severity: high
+  mitre: T1136.001
+  event: file
+  match:
+    all:
+      - {field: file.write, eq: true}
+      - {field: file.path, in: [/etc/passwd, /etc/group, /etc/shadow, /etc/gshadow]}
+      - not: {field: proc.name, in: [useradd, usermod, userdel, groupadd, groupmod, groupdel, gpasswd, passwd, chpasswd, chage, adduser, deluser, addgroup, vipw, vigr, chfn, chsh, newusers, dpkg, systemd-sysusers, exe-init, cloud-init]}
+
+- id: WD-037
+  title: PAM or sshd configuration modified
+  severity: high
+  mitre: T1556.003
+  event: file
+  match:
+    all:
+      - {field: file.write, eq: true}
+      - {field: file.path, prefix: [/etc/pam.d, /etc/ssh/sshd_config]}
+      - not: {field: proc.name, in: [dpkg, apt, apt-get, ucf, pam-auth-update, exe-init]}
+
+- id: WD-038
+  title: System binary directory modified outside package manager
+  severity: medium
+  mitre: T1036.005
+  event: file
+  match:
+    all:
+      - {field: file.write, eq: true}
+      - {field: file.path, prefix: [/usr/bin/, /usr/sbin/, /usr/local/bin/, /boot/]}
+      - not: {field: proc.name, in: [dpkg, apt, apt-get, unattended-upgr, rpm, dnf, yum, pip, pip3, npm, install, update-alternatives, ldconfig, snapd, go, cargo, ln, cp, mv, curl, wget, tar]}
+
+- id: WD-039
+  title: Kernel module autoload configuration modified
+  severity: high
+  mitre: T1547.006
+  event: file
+  match:
+    all:
+      - {field: file.write, eq: true}
+      - {field: file.path, prefix: [/etc/modules, /etc/modules-load.d]}
+      - not: {field: proc.name, in: [dpkg]}
+
+# ------------------------------------------------------- privilege / host
+- id: WD-040
+  title: Unexpected transition to root
+  severity: high
+  mitre: T1068
+  event: creds
+  match:
+    all:
+      - {field: creds.gained_root, eq: true}
+      - not: {field: comm, in: [sudo, su, sshd, sshd-session, sshd-auth, login, cron, atd, systemd, "(systemd)", systemd-executor, polkitd, pkexec, polkit-agent-helper-1, newgrp, unix_chkpwd, mount, umount, fusermount, fusermount3, chsh, chfn, passwd, gpasswd, newuidmap, newgidmap, Xorg, exe-init, dbus-daemon-launch-helper, snap-confine, docker-init]}
+
+- id: WD-041
+  title: Process attached to another with ptrace
+  severity: high
+  mitre: T1055.008
+  event: ptrace
+  match:
+    not: {field: proc.name, in: [gdb, strace, ltrace, lldb, lldb-server, dlv, perf, rr, valgrind, criu, py-spy, rbspy, gcore]}
+
+- id: WD-042
+  title: Kernel module loaded
+  severity: high
+  mitre: T1547.006
+  event: module
+  match: {field: module.name, exists: true}
+
+- id: WD-043
+  title: Tracing-class BPF program loaded by another process
+  description: kprobe/tracing/raw_tp BPF can read and alter kernel memory views; a known rootkit technique.
+  severity: high
+  mitre: T1014
+  event: bpf
+  match:
+    all:
+      - {field: bpf.prog_type, in: [kprobe, tracepoint, raw_tracepoint, raw_tracepoint_writable, tracing, perf_event, lsm, ext, struct_ops]}
+      - not: {field: proc.name, in: [bpftrace, bpftool, falco, tetragon, tracee, cilium-agent, pwru, inspektor-gadget, parca-agent, pyroscope]}
+
+- id: WD-044
+  title: Anonymous writable+executable memory in non-JIT process
+  severity: medium
+  mitre: T1055.009
+  event: wx_mem
+  match:
+    not:
+      any:
+        - {field: proc.name, regex: '^(node|nodejs|deno|bun|java|javaw|dotnet|chrome|chromium|firefox|electron|code|qemu-.*|luajit|pypy.*|julia|nvim|beam\.smp|php-fpm.*|php|mono|claude|python[0-9.]*|ruby|wasmtime|v8|gjs|gnome-shell|Xorg|containerd-shim.*)$'}
+        - {field: proc.exe, contains: [/node_modules/, /.vscode-server/, /.cursor-server/]}
+
+- id: WD-045
+  title: Agent tamper - signal sent to warden
+  severity: critical
+  mitre: T1562.001
+  event: tamper_kill
+  match: {field: signal, exists: true}
+
+# --------------------------------------------------------------- network
+- id: WD-050
+  title: Bind shell - interpreter listening on a port
+  severity: high
+  mitre: T1059
+  event: listen
+  match: {field: proc.name, regex: '^(sh|bash|dash|zsh|nc|ncat|netcat|nc\.(traditional|openbsd)|socat|perl|ruby|php|busybox)$'}
+
+- id: WD-051
+  title: Connection to common mining pool port
+  severity: medium
+  mitre: T1496
+  event: connect
+  match:
+    all:
+      - {field: net.dport, in: [3333, 3334, 4444, 5555, 7777, 8888, 9999, 14433, 14444, 45560, 45700]}
+      - {field: net.daddr_private, eq: false}
+
+- id: WD-052
+  title: DNS lookup of tunneling / OAST / paste / mining domain
+  severity: medium
+  mitre: T1071.004
+  event: dns
+  match:
+    field: dns.query
+    regex: '(^|\.)(ngrok(-free)?\.(io|app|dev)|trycloudflare\.com|serveo\.net|localhost\.run|loca\.lt|pinggy\.(io|link)|bore\.pub|playit\.gg|oast\.(pro|live|site|online|fun|me)|interact\.sh|interactsh\.com|burpcollaborator\.net|oastify\.com|dnslog\.cn|ceye\.io|requestbin\.(net|com)|pipedream\.net|webhook\.site|canarytokens\.com|pastebin\.com|paste\.ee|transfer\.sh|temp\.sh|gofile\.io|anonfiles\.com|supportxmr\.com|nanopool\.org|minexmr\.com|2miners\.com|hashvault\.pro|c3pool\.(com|org)|moneroocean\.stream|f2pool\.com|nicehash\.com|unmineable\.com|herominers\.com|xmrpool\.eu)$'
+
+- id: WD-053
+  title: Suspiciously long DNS label (possible DNS tunneling / exfil)
+  severity: medium
+  mitre: T1048.003
+  event: dns
+  match: {field: dns.query, regex: '(^|\.)[a-z0-9-]{50,}\.'}
+
+- id: WD-054
+  title: Outbound connection blocked by policy
+  severity: medium
+  mitre: T1071
+  event: net_block
+  match: {field: net.daddr, exists: true}
+
+- id: WD-055
+  title: Raw DNS to external resolver bypassing system resolver
+  severity: low
+  mitre: T1071.004
+  event: dns
+  match:
+    all:
+      - {field: dns.server, exists: true}
+      - {field: dns.server_system, eq: false}
+      - not: {field: dns.server, cidr: [127.0.0.0/8, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16, "::1/128", "fe80::/10", "fc00::/7"]}
+      - not: {field: proc.name, in: [systemd-resolved, dnsmasq, unbound, named, coredns, dig, nslookup, host, drill, kdig, resolvectl, dockerd]}
+
+# -------------------------------------------------------- shell activity
+- id: WD-060
+  title: Defense evasion / anti-forensics in interactive shell
+  severity: medium
+  mitre: T1070.003
+  event: shell_cmd
+  match:
+    field: shell.line
+    regex: '(history\s+-c|unset\s+HISTFILE|HISTFILE=/dev/null|HISTSIZE=0|set\s+\+o\s+history|shred\s.*(log|history)|>\s*/var/log/|rm\s+(-[rf]+\s+)?/var/log|chattr\s+\+i|truncate\s+-s\s*0\s+/var/log|journalctl\s+--vacuum|auditctl\s+-D|setenforce\s+0|systemctl\s+(stop|disable)\s+(warden|auditd|falco))'
+
+- id: WD-061
+  title: Reverse shell syntax typed in interactive shell
+  severity: high
+  mitre: T1059.004
+  event: shell_cmd
+  match: {field: shell.line, regex: '(/dev/tcp/|/dev/udp/|nc\s.*-e\s|mkfifo\s.*\|\s*(nc|sh)|socat\s.*exec:)'}
