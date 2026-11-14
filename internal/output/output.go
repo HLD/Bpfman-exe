@@ -34,12 +34,14 @@ type Alert struct {
 }
 
 type Options struct {
-	Format      string
-	AlertsFile  string
-	EventsFile  string
-	Webhook     string
-	MinSeverity string
-	Throttle    time.Duration
+	Format     string
+	AlertsFile string
+	EventsFile string
+	Webhook    string
+	// WebhookToken, when set, is sent as a Bearer token on every webhook POST.
+	WebhookToken string
+	MinSeverity  string
+	Throttle     time.Duration
 }
 
 type Writer struct {
@@ -191,7 +193,12 @@ func (w *Writer) webhookLoop() {
 	cl := &http.Client{Timeout: 10 * time.Second}
 	for b := range w.hook {
 		for attempt := 0; attempt < 3; attempt++ {
-			resp, err := cl.Post(w.opt.Webhook, "application/json", bytes.NewReader(b))
+			req, _ := http.NewRequest("POST", w.opt.Webhook, bytes.NewReader(b))
+			req.Header.Set("Content-Type", "application/json")
+			if w.opt.WebhookToken != "" {
+				req.Header.Set("Authorization", "Bearer "+w.opt.WebhookToken)
+			}
+			resp, err := cl.Do(req)
 			if err == nil {
 				resp.Body.Close()
 				if resp.StatusCode < 300 {

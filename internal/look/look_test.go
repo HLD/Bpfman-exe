@@ -150,7 +150,7 @@ func TestRulesAgainstFixtures(t *testing.T) {
 	}
 	// Exactly the seeded examples fire; benign background rows don't.
 	for id, want := range map[string]string{
-		"LK-010": "usr_a",                  // keyed by login_user_id (new IP only)
+		"LK-010": "usr_a",                 // keyed by login_user_id (new IP only)
 		"LK-011": "SHA256:new,SHA256:sup", // the long-used key stays quiet
 		"LK-020": "exfil",
 		"LK-030": "fresh",

@@ -149,6 +149,18 @@ asked exe.dev about (SSH source IPs, failed logins, a control-plane audit
 table, request IDs passed into the VM, an append-only table agents can write to)
 are listed in the asks doc.
 
+## Send alerts to Edgewatch
+
+Edgewatch's web UI is the fusion point for warden (eBPF), agentless SSH and Look In. To relay kernel alerts to it, connect warden in Edgewatch (**Data sources → Connect warden**) and set:
+
+```yaml
+output:
+  webhook: "http://127.0.0.1:8000/api/ingest/warden"
+  webhook_token: "<token shown once by Edgewatch>"
+```
+
+Edgewatch accepts alerts from its own VM only and ignores `LK-*` alerts, since it polls Look In itself. See Edgewatch's `DATA_SOURCES.md`.
+
 ## Output
 
 * stdout: human-readable, or `-json`

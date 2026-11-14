@@ -5,7 +5,9 @@ output:
   format: text              # text | json  (stdout)
   alerts_file: /var/log/warden/alerts.jsonl
   events_file: ""           # set to log ALL telemetry as JSONL (verbose)
-  webhook: ""               # POST each alert as JSON, e.g. a SIEM collector
+  webhook: ""               # POST each alert as JSON, e.g. a SIEM collector or Edgewatch
+                            # (http://127.0.0.1:8000/api/ingest/warden)
+  webhook_token: ""         # sent as "Authorization: Bearer <token>" (Edgewatch shows it once)
   min_severity: low         # info | low | medium | high | critical
   throttle: 60s             # suppress identical alerts within this window
 

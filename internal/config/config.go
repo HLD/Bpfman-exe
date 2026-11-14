@@ -21,12 +21,13 @@ var DefaultLookRules []byte
 
 type Config struct {
 	Output struct {
-		Format      string        `yaml:"format"`
-		AlertsFile  string        `yaml:"alerts_file"`
-		EventsFile  string        `yaml:"events_file"`
-		Webhook     string        `yaml:"webhook"`
-		MinSeverity string        `yaml:"min_severity"`
-		Throttle    time.Duration `yaml:"throttle"`
+		Format       string        `yaml:"format"`
+		AlertsFile   string        `yaml:"alerts_file"`
+		EventsFile   string        `yaml:"events_file"`
+		Webhook      string        `yaml:"webhook"`
+		WebhookToken string        `yaml:"webhook_token"`
+		MinSeverity  string        `yaml:"min_severity"`
+		Throttle     time.Duration `yaml:"throttle"`
 	} `yaml:"output"`
 	RulesFiles    []string `yaml:"rules_files"`
 	DisableRules  []string `yaml:"disable_rules"`

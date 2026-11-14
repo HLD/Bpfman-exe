@@ -213,7 +213,7 @@ func run(cfg *config.Config, allEvents bool) error {
 	}
 	out, err := output.New(output.Options{
 		Format: cfg.Output.Format, AlertsFile: cfg.Output.AlertsFile, EventsFile: cfg.Output.EventsFile,
-		Webhook: cfg.Output.Webhook, MinSeverity: cfg.Output.MinSeverity, Throttle: cfg.Output.Throttle,
+		Webhook: cfg.Output.Webhook, WebhookToken: cfg.Output.WebhookToken, MinSeverity: cfg.Output.MinSeverity, Throttle: cfg.Output.Throttle,
 	})
 	if err != nil {
 		return err
