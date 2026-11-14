@@ -151,6 +151,20 @@
       - {field: file.path, regex: '^/proc/[0-9]+/(environ|mem)$'}
       - {field: file.foreign_proc, eq: true}
       - not: {field: proc.name, in: [ps, top, htop, btop, systemd, gdb, strace, lsof, procs, glances]}
+      # systemd runs its generators on every daemon-reload (package installs,
+      # `systemctl daemon-reload`) and they read PID 1's environment. Allowed
+      # only for an executable that lives in systemd's root-owned generator
+      # directories AND only for /proc/1/environ, so a renamed binary elsewhere
+      # or any other target still alerts.
+      - not:
+          all:
+            - {field: file.path, eq: /proc/1/environ}
+            - field: proc.exe
+              prefix:
+                - /usr/lib/systemd/system-generators/
+                - /usr/lib/systemd/user-generators/
+                - /lib/systemd/system-generators/
+                - /lib/systemd/user-generators/
 
 - id: WD-024
   title: Kernel or physical memory access
