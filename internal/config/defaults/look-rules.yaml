@@ -221,3 +221,152 @@
     WHERE timestamp >= {since}
       AND (net_rx_bytes < prev_rx OR net_tx_bytes < prev_tx
            OR timestamp - prev_ts > INTERVAL 5 MINUTE)
+
+# ------------------------------------------------- attack surface / network
+# Passive enumeration of what the team exposes and who is mapping it. Built
+# only from Look In rows; nothing here probes a VM.
+
+- id: LK-030
+  title: Host newly exposed to anonymous visitors
+  description: First anonymous 2xx on this host in 30 days. A VM went public (share --public, a changed proxy setting, or an app that stopped requiring login).
+  severity: medium
+  mitre: T1190
+  tables: [http_requests]
+  key: [vm_name, host]
+  sql: |
+    SELECT vm_name, host, min(timestamp) AS first_anonymous,
+      count(*) AS requests, count(DISTINCT source_ip) AS source_ips,
+      list(DISTINCT path)[1:5] AS sample_paths
+    FROM http_requests
+    WHERE timestamp >= now() - INTERVAL 30 DAY
+      AND login_user_id = '' AND status BETWEEN 200 AND 299
+      AND host NOT LIKE '%.shelley.%'
+    GROUP BY vm_name, host
+    HAVING min(timestamp) >= {since}
+      -- the VM must have history, else every first request looks "new"
+      AND vm_name IN (
+        SELECT vm_name FROM http_requests
+        WHERE timestamp >= now() - INTERVAL 30 DAY AND timestamp < {since})
+
+- id: LK-031
+  title: Anonymous state-changing request succeeded
+  description: POST/PUT/PATCH/DELETE answered 2xx with no exe.dev login. A public app is accepting writes from the Internet.
+  severity: high
+  mitre: T1190
+  tables: [http_requests]
+  key: [vm_name, host, method, path]
+  sql: |
+    SELECT vm_name, host, method, path, source_ip, count(*) AS hits,
+      max(status) AS status, left(any_value(user_agent), 120) AS user_agent
+    FROM http_requests
+    WHERE timestamp >= {since} AND login_user_id = ''
+      AND method IN ('POST', 'PUT', 'PATCH', 'DELETE')
+      AND status BETWEEN 200 AND 299
+      AND host NOT LIKE '%.shelley.%'
+    GROUP BY ALL
+
+- id: LK-032
+  title: One source swept several VMs (platform-wide enumeration)
+  description: A single IP touched three or more different VMs in one hour. Targeted attacks hit one host; mapping the platform's address space looks like this.
+  severity: medium
+  mitre: T1595.001
+  tables: [http_requests]
+  key: [source_ip, day]
+  sql: |
+    SELECT source_ip, date_trunc('day', min(timestamp)) AS day,
+      date_trunc('hour', min(timestamp)) AS hour,
+      count(DISTINCT vm_name) AS vms, list(DISTINCT vm_name)[1:10] AS vm_sample,
+      count(*) AS requests, count(DISTINCT status) AS statuses,
+      left(any_value(user_agent), 120) AS user_agent
+    FROM http_requests
+    WHERE timestamp >= {since} AND login_user_id = '' AND source_ip <> ''
+    GROUP BY source_ip, date_trunc('hour', timestamp)
+    HAVING count(DISTINCT vm_name) >= 3
+
+- id: LK-033
+  title: Content discovery (many distinct paths answered 404)
+  description: Dictionary-style forced browsing against one host from one IP.
+  severity: medium
+  mitre: T1595.003
+  tables: [http_requests]
+  key: [vm_name, source_ip, hour]
+  sql: |
+    SELECT vm_name, host, source_ip, date_trunc('hour', min(timestamp)) AS hour,
+      count(DISTINCT path) AS distinct_paths, count(*) AS requests,
+      left(any_value(user_agent), 120) AS user_agent
+    FROM http_requests
+    WHERE timestamp >= {since} AND login_user_id = '' AND status = 404
+    GROUP BY vm_name, host, source_ip, date_trunc('hour', timestamp)
+    HAVING count(DISTINCT path) >= 30
+
+- id: LK-034
+  title: Coordinated probe campaign (same path from many IPs)
+  description: One exploit or recon path requested by five or more unrelated IPs in a day, a botnet or mass-exploitation wave rather than a lone scanner.
+  severity: medium
+  mitre: T1595
+  tables: [http_requests]
+  key: [path, day]
+  sql: |
+    SELECT lower(path) AS path, date_trunc('day', min(timestamp)) AS day,
+      count(DISTINCT source_ip) AS source_ips, count(DISTINCT vm_name) AS vms,
+      count(*) AS requests, max(status) AS max_status
+    FROM http_requests
+    WHERE timestamp >= {since} AND login_user_id = ''
+      AND regexp_matches(lower(path),
+        '(/\.env|/\.git/|/\.aws/|wp-(admin|login|config)|phpmyadmin|/actuator|/cgi-bin/|\.\./|%2e%2e|/etc/passwd|/vendor/phpunit|/boaform|/hnap1|/\.ds_store|/backup\.(zip|tar|sql)|/(jndi|\$\{))')
+    GROUP BY lower(path)
+    HAVING count(DISTINCT source_ip) >= 5
+
+- id: LK-035
+  title: Repeated server errors for anonymous visitors (possible exploitation)
+  description: HTTP 500 responses to unauthenticated clients, often what a successful or half-successful injection or deserialization attempt looks like.
+  severity: medium
+  mitre: T1190
+  tables: [http_requests]
+  key: [vm_name, source_ip, hour]
+  sql: |
+    SELECT vm_name, host, source_ip, date_trunc('hour', min(timestamp)) AS hour,
+      count(*) AS errors, count(DISTINCT path) AS distinct_paths,
+      list(DISTINCT path)[1:5] AS sample_paths
+    FROM http_requests
+    WHERE timestamp >= {since} AND login_user_id = '' AND status = 500
+    GROUP BY vm_name, host, source_ip, date_trunc('hour', timestamp)
+    HAVING count(*) >= 5
+
+- id: LK-036
+  title: Egress surge on an Internet-exposed VM
+  description: A VM that served anonymous traffic in the last 24 h sent more than 100 MB in an hour and more than 5x its own p90. Possible post-exploitation exfiltration, or abuse as a proxy/relay.
+  severity: high
+  mitre: T1041
+  tables: [vm_metrics, http_requests]
+  key: [vm_name, hour]
+  sql: |
+    WITH d AS (
+      SELECT vm_name, timestamp,
+        increase(net_tx_bytes, lag(net_tx_bytes) OVER w) AS tx
+      FROM vm_metrics
+      WHERE timestamp >= now() - INTERVAL 7 DAY
+      WINDOW w AS (PARTITION BY vm_name ORDER BY timestamp)
+    ),
+    h AS (
+      SELECT vm_name, date_trunc('hour', timestamp) AS hour, sum(tx) AS tx
+      FROM d GROUP BY ALL
+    ),
+    base AS (
+      SELECT vm_name, quantile_cont(tx, 0.9) AS p90_tx, count(*) AS hours
+      FROM h WHERE hour < date_trunc('hour', {since})
+      GROUP BY vm_name
+    ),
+    exposed AS (
+      SELECT vm_name, count(*) AS anon_requests FROM http_requests
+      WHERE timestamp >= now() - INTERVAL 24 HOUR AND login_user_id = ''
+        AND status BETWEEN 200 AND 299 AND host NOT LIKE '%.shelley.%'
+      GROUP BY vm_name
+    )
+    SELECT h.vm_name, h.hour, round(h.tx / 1e6, 1) AS tx_mb,
+      round(base.p90_tx / 1e6, 1) AS baseline_p90_mb, exposed.anon_requests
+    FROM h JOIN base USING (vm_name) JOIN exposed USING (vm_name)
+    WHERE h.hour >= date_trunc('hour', {since})
+      AND base.hours >= 6
+      AND h.tx > 100e6
+      AND h.tx > 5 * greatest(base.p90_tx, 1e6)

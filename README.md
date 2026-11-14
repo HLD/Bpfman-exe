@@ -2,7 +2,7 @@
 
 An eBPF host detection & response agent built for exe.dev VMs: a single
 static Go binary (cilium/ebpf, CO-RE), 19 kernel probes, 40 detection rules
-mapped to MITRE ATT&CK, and in-kernel prevention. It also runs 12 SQL
+mapped to MITRE ATT&CK, and in-kernel prevention. It also runs 19 SQL
 detections over exe.dev's Look In tables (proxy requests, VM metrics, SSH
 logins), so platform-side and in-guest alerts land in one stream.
 
@@ -130,6 +130,13 @@ dedupe state lives in `/var/lib/warden/look-state.json` and survives restarts.
 | LK-020 | vm_metrics | Egress over 200 MB/h and 10x the VM's own p90 baseline |
 | LK-021 | vm_metrics | 15+ minutes of CPU saturation (miner) |
 | LK-022 | vm_metrics | VM restarted, moved host, or stopped reporting |
+| LK-030 | http_requests | Host newly exposed to anonymous visitors (VM with history went public) |
+| LK-031 | http_requests | Anonymous POST/PUT/PATCH/DELETE got a 2xx |
+| LK-032 | http_requests | One source IP swept 3+ VMs in an hour (platform enumeration) |
+| LK-033 | http_requests | Content discovery: 30+ distinct 404 paths from one IP on one host |
+| LK-034 | http_requests | Same recon path from 5+ IPs in a day (campaign) |
+| LK-035 | http_requests | 5+ anonymous HTTP 500s from one IP in an hour (possible exploitation) |
+| LK-036 | vm_metrics + http_requests | Egress surge on a VM that served anonymous traffic (overlaps LK-020 by design) |
 
 Rules that need a table that doesn't exist yet (it appears with its first row)
 are skipped until it does. `go test ./internal/look` runs every rule against

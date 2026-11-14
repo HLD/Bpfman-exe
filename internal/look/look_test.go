@@ -40,6 +40,36 @@ INSERT INTO http_requests SELECT now() - INTERVAL 10 MINUTE, '', 'tm_1', '', 'ap
 INSERT INTO http_requests VALUES (now() - INTERVAL 5 MINUTE, '', 'tm_1', 'usr_a', 'app', 'GET',
   'app.exe.xyz', '/', 200, 5, 100, '192.0.2.77', 'Mozilla/5.0');
 
+-- LK-031 anonymous write accepted
+INSERT INTO http_requests VALUES (now() - INTERVAL 5 MINUTE, '', 'tm_1', '', 'pub', 'POST',
+  'pub.exe.xyz', '/api/upload', 201, 9, 40, '203.0.113.13', 'curl/8.0');
+-- LK-032 one IP sweeping four VMs
+INSERT INTO http_requests SELECT now() - INTERVAL 8 MINUTE, '', 'tm_1', '', 'sweep' || i, 'GET',
+  'sweep' || i || '.exe.xyz', '/', 307, 1, 0, '203.0.113.14', 'Go-http-client/1.1' FROM range(4) t(i);
+-- LK-033 content discovery: 40 distinct 404 paths
+INSERT INTO http_requests SELECT now() - INTERVAL 8 MINUTE, '', 'tm_1', '', 'pub', 'GET',
+  'pub.exe.xyz', '/dir' || i, 404, 1, 10, '203.0.113.15', 'gobuster-ish' FROM range(40) t(i);
+-- LK-034 same recon path from six IPs (all 404, so LK-002 stays quiet)
+INSERT INTO http_requests SELECT now() - INTERVAL 7 MINUTE, '', 'tm_1', '', 'camp', 'GET',
+  'camp.exe.xyz', '/boaform/admin/formLogin', 404, 1, 10, '198.18.0.' || i, 'Mozilla/5.0' FROM range(6) t(i);
+-- LK-035 five 500s to one anonymous IP
+INSERT INTO http_requests SELECT now() - INTERVAL 6 MINUTE, '', 'tm_1', '', 'pub', 'GET',
+  'pub.exe.xyz', '/render?x=' || i, 500, 1, 10, '203.0.113.16', 'python-requests' FROM range(5) t(i);
+-- negatives: 2 VMs swept, 29 distinct 404s, 4 500s, authenticated POST
+INSERT INTO http_requests SELECT now() - INTERVAL 8 MINUTE, '', 'tm_1', '', 'two' || (i % 2), 'GET',
+  'two.exe.xyz', '/', 307, 1, 0, '203.0.113.50', 'x' FROM range(4) t(i);
+INSERT INTO http_requests SELECT now() - INTERVAL 8 MINUTE, '', 'tm_1', '', 'pub', 'GET',
+  'pub.exe.xyz', '/n' || i, 404, 1, 10, '203.0.113.51', 'x' FROM range(29) t(i);
+INSERT INTO http_requests SELECT now() - INTERVAL 6 MINUTE, '', 'tm_1', '', 'pub', 'GET',
+  'pub.exe.xyz', '/e' || i, 500, 1, 10, '203.0.113.52', 'x' FROM range(4) t(i);
+INSERT INTO http_requests VALUES (now() - INTERVAL 5 MINUTE, '', 'tm_1', 'usr_a', 'app', 'POST',
+  'app.exe.xyz', '/api/save', 200, 9, 40, '198.51.100.1', 'Mozilla/5.0');
+-- LK-030: 'fresh' has history behind a login, then goes public
+INSERT INTO http_requests SELECT now() - INTERVAL (i) HOUR, '', 'tm_1', 'usr_a', 'fresh', 'GET',
+  'fresh.exe.xyz', '/', 200, 5, 100, '198.51.100.1', 'Mozilla/5.0' FROM range(3, 72) t(i);
+INSERT INTO http_requests VALUES (now() - INTERVAL 4 MINUTE, '', 'tm_1', '', 'fresh', 'GET',
+  'fresh.exe.xyz', '/', 200, 5, 100, '203.0.113.17', 'Mozilla/5.0');
+
 CREATE TABLE ssh_access (timestamp TIMESTAMPTZ, user_id VARCHAR, team_id VARCHAR,
   login_user_id VARCHAR, vm_name VARCHAR, via VARCHAR, key_fingerprint VARCHAR, ssh_user VARCHAR);
 -- benign: long-used key
@@ -58,6 +88,9 @@ INSERT INTO vm_metrics SELECT now() - INTERVAL 1 HOUR * 72 + INTERVAL 1 MINUTE *
   i * 1000000, i * 100000, i * 170000, 0, 0 FROM range(0, 4318) t(i);
 INSERT INTO vm_metrics VALUES (now() - INTERVAL 1 MINUTE, '', 'tm_1', 'exfil', 2,
   4320000000, 432000000, 4318 * 170000 + 600000000, 0, 0);
+-- LK-036: the 'exfil' VM also serves anonymous visitors
+INSERT INTO http_requests VALUES (now() - INTERVAL 30 MINUTE, '', 'tm_1', '', 'exfil', 'GET',
+  'exfil.exe.xyz', '/', 200, 3, 512, '203.0.113.18', 'Mozilla/5.0');
 -- LK-021 'miner': 30 minutes at 2 of 2 vCPUs
 INSERT INTO vm_metrics SELECT now() - INTERVAL 31 MINUTE + INTERVAL 1 MINUTE * i, '', 'tm_1', 'miner', 2,
   i * 120000000, i * 1000, i * 1000, 0, 0 FROM range(0, 31) t(i);
@@ -120,6 +153,13 @@ func TestRulesAgainstFixtures(t *testing.T) {
 		"LK-010": "usr_a",                  // keyed by login_user_id (new IP only)
 		"LK-011": "SHA256:new,SHA256:sup", // the long-used key stays quiet
 		"LK-020": "exfil",
+		"LK-030": "fresh",
+		"LK-032": "203.0.113.14",
+		"LK-031": "pub",
+		"LK-033": "pub",
+		"LK-034": "/boaform/admin/formlogin",
+		"LK-035": "pub",
+		"LK-036": "exfil",
 		"LK-021": "miner",
 		"LK-022": "reboot",
 	} {
